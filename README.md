@@ -1,3 +1,5 @@
+Fork to add batch scripting to encode to 1080p, 720p, SD, w/5.1 AC-3 as primary channel and dual channel AAC as second channel, link files in folder for Radarr, then update Plex.
+
 # Video Transcoding
 
 Tools to transcode, inspect and convert videos.
