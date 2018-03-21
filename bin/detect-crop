@@ -2,7 +2,7 @@
 #
 # detect-crop
 #
-# Copyright (c) 2013-2018 Don Melton
+# Copyright (c) 2013-2017 Don Melton
 #
 
 $LOAD_PATH.unshift File.expand_path(File.dirname(__FILE__) + '/../lib')
@@ -31,6 +31,8 @@ Usage: #{$PROGRAM_NAME} [OPTION]... [FILE|DIRECTORY]...
                       (default: main feature or first listed)
     --constrain     constrain crop to optimal shape
     --values-only   output only unambiguous crop values, not commands
+    --player mpv|mplayer
+                    select player for preview commands (default: mpv)
 
 -v, --verbose       increase diagnostic information
 -q, --quiet         decrease     "           "
@@ -48,6 +50,7 @@ HERE
       @title        = nil
       @constrain    = false
       @values_only  = false
+      @player       = :mpv
     end
 
     def define_options(opts)
@@ -55,6 +58,15 @@ HERE
       opts.on('--title ARG', Integer) { |arg| @title = arg }
       opts.on('--constrain')          { @constrain = true }
       opts.on('--values-only')        { @values_only = true }
+
+      opts.on '--player ARG' do |arg|
+        @player = case arg
+        when 'mpv', 'mplayer'
+          arg.to_sym
+        else
+          fail UsageError, "invalid player argument: #{arg}"
+        end
+      end
     end
 
     def configure
@@ -67,13 +79,13 @@ HERE
 
       if @scan
         media = Media.new(path: arg, title: @title)
-        Console.debug media.info.inspect
+        Console.debug media.info
         puts media.summary
         return
       end
 
       media = Media.new(path: arg, title: @title, autocrop: true, extended: false)
-      Console.debug media.info.inspect
+      Console.debug media.info
       width, height = media.info[:width], media.info[:height]
       directory = media.info[:directory]
       hb_crop = media.info[:autocrop]
@@ -90,8 +102,16 @@ HERE
 
       print_all = ->(crop) do
         puts
-        puts "mpv --no-audio --vf \"lavfi=[drawbox=#{Crop.drawbox_string(crop, width, height)}:invert:1]\" #{shell_path}"
-        puts "mpv --no-audio --vf crop=#{Crop.player_string(crop, width, height)} #{shell_path}"
+
+        if @player == :mpv
+          puts "mpv --no-audio --vf \"lavfi=[drawbox=#{Crop.drawbox_string(crop, width, height)}:invert:1]\" #{shell_path}"
+          puts "mpv --no-audio --vf crop=#{Crop.player_string(crop, width, height)} #{shell_path}"
+        else
+          str = Crop.player_string(crop, width, height)
+          puts "mplayer -really-quiet -nosound -vf rectangle=#{str} #{shell_path}"
+          puts "mplayer -really-quiet -nosound -vf crop=#{str} #{shell_path}"
+        end
+
         print_transcode.call crop
       end
 

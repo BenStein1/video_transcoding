@@ -2,7 +2,7 @@
 #
 # transcode-video
 #
-# Copyright (c) 2013-2018 Don Melton
+# Copyright (c) 2013-2017 Don Melton
 #
 
 $LOAD_PATH.unshift File.expand_path(File.dirname(__FILE__) + '/../lib')
@@ -56,8 +56,6 @@ Output options:
     --dry-run       don't transcode, just show `HandBrakeCLI` command and exit
 
 Quality options:
-    --abr           use constrained average bitrate (ABR) ratecontrol
-                      (predictable size with different quality than default)
     --target big|small
                     apply video bitrate target macro for all input resolutions
                       (`big` trades some size for increased quality)
@@ -109,7 +107,7 @@ Audio options:
                       (default: first track, i.e. 1)
                       (language code must be ISO 639-2 format, e.g.: `eng`)
                       (default output can be two audio tracks,
-                        both surround and stereo, i.e. width is `double`)
+                        both surround and stereo, i.e. "width" is `double`)
     --add-audio TRACK[=NAME]|LANGUAGE[,LANGUAGE,...]|all
                     add track selected by number assigning it an optional name
                       or add tracks selected with one or more language codes
@@ -117,25 +115,21 @@ Audio options:
                       (language code must be ISO 639-2 format, e.g.: `eng`)
                       (multiple languages are separated by commas)
                       (default output is single AAC audio track,
-                        i.e. width is `stereo`)
+                        i.e. "width" is `stereo`)
                       (can be used multiple times)
     --audio-width TRACK|main|other|all=double|surround|stereo
-                    set audio output width for specific track by number
+                    set audio output "width" for specific track by number
                       or main track or other non-main tracks or all tracks
                       with `double` to allow room for two output tracks
                       with `surround` to allow single surround or stereo track
                       with `stereo` to allow only single stereo track
                       (can be used multiple times)
-    --reverse-double-order
-                    reverse order of `double` width audio output tracks
     --prefer-ac3    prefer AC-3 over AAC format when encoding or copying audio
                       even when original track channel layout is stereo or mono
-                      (sets audio output width for all tracks to `surround`)
-    --ac3-encoder ac3|eac3
-                    set AC-3 audio encoder (default: ac3)
-    --ac3-bitrate 384|448|640|768|1536
+                      (sets audio output "width" for all tracks to `surround`)
+    --ac3-bitrate 384|448|640
                     set AC-3 audio bitrate (default: 640)
-    --pass-ac3-bitrate 384|448|640|768|1536
+    --pass-ac3-bitrate 384|448|640
                     set AC-3 audio pass-through bitrate (default: 640)
     --copy-audio TRACK|all
                     try to copy track selected by number in its original format
@@ -192,6 +186,13 @@ External subtitle options:
                       (can be used multiple times)
 
 Advanced options:
+    --cvbr          use simple constrained variable bitrate (CVBR) ratecontrol
+                      (more predictable size while avoiding VBV underflows)
+                      (use with `--target big` for best results)
+    --abr           use modified average bitrate (ABR) ratecontrol
+                      (predictable size but lower quality than default)
+    --vbr QUALITY   use true VBR ratecontrol at constant video quality (0-51)
+                      (unpredictable size but useful for comparison to default)
 -E, --encoder-option NAME=VALUE|_NAME
                     pass x264 video encoder option by name with value
                       or disable use of option by prefixing name with "_"
@@ -228,11 +229,10 @@ HERE
       @format                     = :mkv
       @log                        = true
       @dry_run                    = false
-      @use_abr                    = false
-      @target_bitrate_2160p       = 12000
-      @target_bitrate_1080p       = 6000
-      @target_bitrate_720p        = 3000
-      @target_bitrate_480p        = 1500
+      @max_bitrate_2160p          = 12000
+      @max_bitrate_1080p          = 6000
+      @max_bitrate_720p           = 3000
+      @max_bitrate_480p           = 1500
       @quick                      = false
       @veryquick                  = false
       @crop                       = {:top => 0, :bottom => 0, :left => 0, :right => 0}
@@ -245,9 +245,7 @@ HERE
       @audio_name                 = {}
       @audio_language             = []
       @audio_width                = {:main => :double, :other => :stereo}
-      @reverse_double_order       = false
       @prefer_ac3                 = false
-      @ac3_encoder                = 'ac3'
       @ac3_bitrate                = 640
       @pass_ac3_bitrate           = 640
       @copy_audio                 = []
@@ -264,6 +262,9 @@ HERE
       @srt_language               = {}
       @srt_encoding               = {}
       @srt_offset                 = {}
+      @use_cvbr                   = false
+      @use_abr                    = false
+      @vbr_quality                = nil
       @encoder_options            = {}
       @disable_encoder_options    = []
       @handbrake_options          = {}
@@ -318,34 +319,30 @@ HERE
       opts.on('--no-log')             { @log = false }
       opts.on('--dry-run')            { @dry_run = true }
 
-      opts.on '--abr' do
-        @use_abr = true
-      end
-
       opts.on '--target ARG' do |arg|
         case arg
         when 'big'
-          @target_bitrate_2160p = 16000
-          @target_bitrate_1080p = 8000
-          @target_bitrate_720p  = 4000
-          @target_bitrate_480p  = 2000
+          @max_bitrate_2160p  = 16000
+          @max_bitrate_1080p  = 8000
+          @max_bitrate_720p   = 4000
+          @max_bitrate_480p   = 1000
         when 'small'
-          @target_bitrate_2160p = 8000
-          @target_bitrate_1080p = 4000
-          @target_bitrate_720p  = 2000
-          @target_bitrate_480p  = 1000
+          @max_bitrate_2160p  = 8000
+          @max_bitrate_1080p  = 4000
+          @max_bitrate_720p   = 2000
+          @max_bitrate_480p   = 500
         when /^([0-9]+p)=([1-9][0-9]*)$/
           bitrate = $2.to_i
 
           case $1
           when '2160p'
-            @target_bitrate_2160p = bitrate
+            @max_bitrate_2160p = bitrate
           when '1080p'
-            @target_bitrate_1080p = bitrate
+            @max_bitrate_1080p = bitrate
           when '720p'
-            @target_bitrate_720p = bitrate
+            @max_bitrate_720p = bitrate
           when '480p'
-            @target_bitrate_480p = bitrate
+            @max_bitrate_480p = bitrate
           else
             fail UsageError, "invalid target video bitrate resolution: #{$1}"
           end
@@ -358,6 +355,8 @@ HERE
 
           @target_bitrate = arg.to_i
         end
+
+        @vbr_quality = nil
       end
 
       opts.on '--quick' do
@@ -413,9 +412,23 @@ HERE
         end
       end
 
+      opts.on '--1080p' do
+        force_handbrake_option 'maxWidth', '1920'
+        force_handbrake_option 'maxHeight', '1080'
+        @handbrake_options.delete 'width'
+        @handbrake_options.delete 'height'
+      end
+
       opts.on '--720p' do
         force_handbrake_option 'maxWidth', '1280'
         force_handbrake_option 'maxHeight', '720'
+        @handbrake_options.delete 'width'
+        @handbrake_options.delete 'height'
+      end
+
+      opts.on '--SD' do
+        force_handbrake_option 'maxWidth', '720'
+        force_handbrake_option 'maxHeight', '576'
         @handbrake_options.delete 'width'
         @handbrake_options.delete 'height'
       end
@@ -538,26 +551,15 @@ HERE
         end
       end
 
-      opts.on('--reverse-double-order') { @reverse_double_order = true }
-
       opts.on '--prefer-ac3' do
         @prefer_ac3 = true
         @audio_width[:main] = :surround
         @audio_width[:other] = :surround
       end
 
-      opts.on '--ac3-encoder ARG' do |arg|
-        @ac3_encoder = case arg
-        when 'ac3', 'eac3'
-          arg
-        else
-          fail UsageError, "invalid AC-3 audio encoder: #{arg}"
-        end
-      end
-
       opts.on '--ac3-bitrate ARG', Integer do |arg|
         @ac3_bitrate = case arg
-        when 384, 448, 640, 768, 1536
+        when 384, 448, 640
           arg
         else
           fail UsageError, "unsupported AC-3 audio bitrate: #{arg}"
@@ -566,7 +568,7 @@ HERE
 
       opts.on '--pass-ac3-bitrate ARG', Integer do |arg|
         @pass_ac3_bitrate = case arg
-        when 384, 448, 640, 768, 1536
+        when 384, 448, 640
           arg
         else
           fail UsageError, "unsupported AC-3 audio pass-through bitrate: #{arg}"
@@ -714,6 +716,24 @@ HERE
         @srt_offset[@srt_file.size - 1] = arg
       end
 
+      opts.on '--cvbr' do
+        @use_cvbr = true
+        @use_abr = false
+        @vbr_quality = nil
+      end
+
+      opts.on '--abr' do
+        @use_abr = true
+        @use_cvbr = false
+        @vbr_quality = nil
+      end
+
+      opts.on '--vbr ARG', Float do |arg|
+        @vbr_quality = arg
+        @use_cvbr = false
+        @use_abr = false
+      end
+
       opts.on '-E', '--encoder-option ARG' do |arg|
         if arg =~ /^([a-z0-9][a-z0-9_-]+)=([^ :]+)$/
           @encoder_options[$1] = $2
@@ -791,14 +811,16 @@ HERE
 
       if @scan
         media = Media.new(path: arg, title: @title)
-        Console.debug media.info.inspect
+        print "Filename: "
+		puts File.basename(media.path)
+		Console.debug media.info
         puts media.summary
         return
       end
 
       seconds = Time.now.tv_sec
       media = Media.new(path: arg, title: @title, autocrop: @crop == :detect)
-      Console.debug media.info.inspect
+      Console.debug media.info
       handbrake_options = {
         'input' => arg,
         'output' => resolve_output(media),
@@ -916,17 +938,17 @@ HERE
       handbrake_options['encoder-preset'] = 'medium'
 
       if width > 1920 or height > 1080
-        encoder_level = '5.1'
-        bitrate = @target_bitrate_2160p
+        encoder_level = '4.1'
+        max_bitrate = @max_bitrate_2160p
       elsif width > 1280 or height > 720
-        encoder_level = '4.0'
-        bitrate = @target_bitrate_1080p
+        encoder_level = '4.1'
+        max_bitrate = @max_bitrate_1080p
       elsif width * height > 720 * 576
-        encoder_level = '3.1'
-        bitrate = @target_bitrate_720p
+        encoder_level = '4.1'
+        max_bitrate = @max_bitrate_720p
       else
-        encoder_level = '3.0'
-        bitrate = @target_bitrate_480p
+        encoder_level = '4.1'
+        max_bitrate = @max_bitrate_480p
       end
 
       case encoder
@@ -944,36 +966,37 @@ HERE
         handbrake_options['encoder-profile'] = 'main10'
       end
 
-      if @target_bitrate.nil?
-        unless media.info[:directory]
-          media_bitrate = ((((media.info[:size] * 8) / media.info[:duration]) / 1000) / 1000) * 1000
+      if @vbr_quality.nil?
+        if @target_bitrate.nil?
+          unless media.info[:directory]
+            bitrate = ((((media.info[:size] * 8) / media.info[:duration]) / 1000) / 1000) * 1000
 
-          if media_bitrate < bitrate
-            min_bitrate = bitrate / 2
+            if bitrate < max_bitrate
+              min_bitrate = max_bitrate / 2
 
-            if media_bitrate < min_bitrate
-              bitrate = min_bitrate
-            else
-              bitrate = media_bitrate
+              if bitrate < min_bitrate
+                max_bitrate = min_bitrate
+              else
+                max_bitrate = bitrate
+              end
             end
           end
+        else
+          max_bitrate = @target_bitrate
         end
-      else
-        bitrate = @target_bitrate
-      end
 
-      if @use_abr
-        handbrake_options['vb']         = bitrate.to_s
-        encoder_options['vbv-maxrate']  = ((bitrate * 1.5).to_i).to_s
-        encoder_options['vbv-bufsize']  = ((bitrate * 2).to_i).to_s
-        encoder_options['nal-hrd']      = 'vbr' if encoder =~ /^x264(?:_10bit)?$/
-        encoder_options['hrd']          = '1'   if encoder =~ /^x265(?:_1[026]bit)?$/
+        if @use_abr
+          handbrake_options['vb'] = max_bitrate.to_s
+        else
+          handbrake_options['quality'] = '1'
+          encoder_options['vbv-maxrate'] = max_bitrate.to_s
+          encoder_options['vbv-bufsize'] = (@encoder_options.fetch('vbv-maxrate', max_bitrate).to_i * 2).to_s
+          encoder_options['crf-max'] = @use_cvbr ? '30' : '24'
+        end
+
+        encoder_options['qpmax'] = '34' unless @use_cvbr
       else
-        handbrake_options['quality']    = '1'
-        encoder_options['vbv-maxrate']  = bitrate.to_s
-        encoder_options['vbv-bufsize']  = ((bitrate * 2).to_i).to_s
-        encoder_options['crf-max']      = '25'
-        encoder_options['qpmax']        = '34'
+        handbrake_options['quality'] = @vbr_quality.to_s.gsub(/\.0+$/, '')
       end
 
       if  (@quick or @veryquick) and
@@ -1045,37 +1068,28 @@ HERE
       end
 
       tracks, encoders, bitrates, names = [], [], [], []
-
-      add_surround = ->(info, copy) do
-        bitrate = info[:bps].nil? ? 640 : info[:bps] / 1000
-
-        if  copy or
-            (((@ac3_encoder == 'ac3'  and info[:format] == 'AC3') or
-              (@ac3_encoder == 'eac3' and info[:format] =~ /^(?:E-)?AC3$/)) and
-            bitrate <= @pass_ac3_bitrate)
-          encoders << 'copy'
-          bitrates << ''
-        else
-          encoders << @ac3_encoder
-
-          if  (@ac3_encoder == 'ac3'  and @ac3_bitrate >= 640) or
-              (@ac3_encoder == 'eac3' and @ac3_bitrate == 1536)
-            bitrates << ''
-          else
-            bitrates << @ac3_bitrate.to_s
-          end
-        end
-      end
-
-      add_stereo = ->(info, copy) do
+            add_stereo = ->(info, copy) do
         if copy or (info[:format] == 'AAC' and info[:channels] <= 2.0)
           encoders << 'copy'
         else
           @aac_encoder ||= HandBrake.aac_encoder
           encoders << @aac_encoder
         end
-
         bitrates << ''
+      end
+	  add_surround = ->(info, copy) do
+        bitrate = info[:bps].nil? ? 640 : info[:bps] / 1000
+        if copy or (info[:format] == 'AC3' and bitrate <= @pass_ac3_bitrate)
+          encoders << 'copy'
+          bitrates << ''
+        else
+          encoders << 'ac3'
+          if @ac3_bitrate == 640
+            bitrates << ''
+          else
+            bitrates << @ac3_bitrate.to_s
+          end
+        end
       end
 
       track_order.each do |track|
@@ -1105,7 +1119,7 @@ HERE
             tracks << track
             names << name
 
-            if @format == :mkv ? !@reverse_double_order : @reverse_double_order
+            if @format == :mkv
               add_surround.call info, copy
               add_stereo.call info, false
             else
@@ -1127,8 +1141,8 @@ HERE
       end
 
       handbrake_options['audio'] = tracks.join(',')
-      handbrake_options['aencoder'] = encoders.join(',')
-      handbrake_options['audio-fallback'] = @ac3_encoder unless @copy_audio.empty?
+      handbrake_options['aencoder'] = encoders.reverse.join(",")
+      handbrake_options['audio-fallback'] = 'ac3' unless @copy_audio.empty?
       bitrates = bitrates.join(',')
       handbrake_options['ab'] = bitrates if bitrates.gsub(/,/, '') != ''
       names = names.join(',')
@@ -1276,7 +1290,7 @@ HERE
         return
       end
 
-      Console.debug handbrake_command.inspect
+      Console.debug handbrake_command
       log_file = @log ? File.new(handbrake_options['output'] + '.log', 'wb') : nil
       Console.info 'Transcoding with HandBrakeCLI...'
 
@@ -1302,7 +1316,7 @@ HERE
     def adjust_metadata(output, renamed_audio)
       return if @dry_run
       media = Media.new(path: output, allow_directory: false)
-      Console.debug media.info.inspect
+      Console.debug media.info
 
       if  media.info[:mkv] and
           media.info[:subtitle].include? 1 and
